@@ -284,7 +284,26 @@ class CoffeeStore: ObservableObject {
         Task { await saveRoundToCloud(round) }
     }
     
-    // MARK: - Leaderboard
+    // MARK: - Performance Tracking
+    func updateFiredOrPIPs(for participantID: String, count: Int) {
+        guard let index = participants.firstIndex(where: { $0.id == participantID }) else { return }
+        
+        participants[index].firedOrPIPsLastWeek = max(0, count)
+        let updated = participants[index]
+        
+        saveLocal()
+        Task { await saveParticipantToCloud(updated) }
+    }
+    
+    func getPerformanceLeaderboard() -> [Participant] {
+        participants.sorted { a, b in
+            if a.firedOrPIPsLastWeek != b.firedOrPIPsLastWeek {
+                return a.firedOrPIPsLastWeek > b.firedOrPIPsLastWeek
+            }
+            return a.name < b.name
+        }
+    }
+    
     func getLeaderboard() -> [Participant] {
         participants.sorted { $0.paymentBalance > $1.paymentBalance }
     }

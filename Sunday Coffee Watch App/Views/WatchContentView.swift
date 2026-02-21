@@ -4,6 +4,7 @@ import WatchKit
 struct WatchContentView: View {
     @EnvironmentObject private var store: CoffeeStore
     @State private var attendees: Set<String> = []
+    @State private var hasRevealedPayer = false
     @State private var showingSavedBanner = false
 
     private var attendeeList: [Participant] {
@@ -25,7 +26,7 @@ struct WatchContentView: View {
     var body: some View {
         List {
             Section {
-                if let payer = nextPayer {
+                if hasRevealedPayer, let payer = nextPayer {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Next to pay")
                             .font(.caption2)
@@ -38,8 +39,12 @@ struct WatchContentView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                } else {
+                } else if attendeeList.isEmpty {
                     Text("Select at least 2 attendees")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Check-in complete. Tap Reveal Payer.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -62,10 +67,15 @@ struct WatchContentView: View {
             }
 
             Section {
+                Button(hasRevealedPayer ? "Payer Revealed" : "Reveal Payer") {
+                    hasRevealedPayer = true
+                }
+                .disabled(attendeeList.count < 2)
+
                 Button("Record Round") {
                     saveRound()
                 }
-                .disabled(attendeeList.count < 2 || nextPayer == nil)
+                .disabled(attendeeList.count < 2 || !hasRevealedPayer || nextPayer == nil)
 
                 if showingSavedBanner {
                     Text("Saved to iCloud")
@@ -94,9 +104,6 @@ struct WatchContentView: View {
             }
         }
         .task {
-            if attendees.isEmpty {
-                attendees = Set(store.participants.map(\.id))
-            }
             if !store.isSyncing {
                 await refreshFromCloud(playHaptic: false)
             }
@@ -104,9 +111,7 @@ struct WatchContentView: View {
         .onChange(of: store.participants) { _, updated in
             let validIDs = Set(updated.map(\.id))
             attendees = attendees.intersection(validIDs)
-            if attendees.isEmpty {
-                attendees = validIDs
-            }
+            hasRevealedPayer = false
         }
     }
 
@@ -116,6 +121,7 @@ struct WatchContentView: View {
         } else {
             attendees.insert(participantID)
         }
+        hasRevealedPayer = false
     }
 
     private func saveRound() {
@@ -125,6 +131,9 @@ struct WatchContentView: View {
         withAnimation {
             showingSavedBanner = true
         }
+
+        attendees.removeAll()
+        hasRevealedPayer = false
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             withAnimation {

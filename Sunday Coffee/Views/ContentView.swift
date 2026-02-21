@@ -13,9 +13,9 @@ struct ContentView: View {
                         Label("Pay", systemImage: "dollarsign.circle.fill")
                     }
                 
-                LeaderboardView()
+                PerformanceView()
                     .tabItem {
-                        Label("Leaderboard", systemImage: "trophy.fill")
+                        Label("Performance", systemImage: "person.3.sequence.fill")
                     }
                 
                 HistoryView()

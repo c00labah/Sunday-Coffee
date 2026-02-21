@@ -9,6 +9,7 @@ struct Participant: Identifiable, Codable, Hashable {
     var nickname: String
     var roundsPaid: Int
     var roundsAttended: Int
+    var firedOrPIPsLastWeek: Int
     var lastPaidDate: Date?
     var avatarEmoji: String
     var isCurrentUser: Bool
@@ -34,25 +35,25 @@ struct Participant: Identifiable, Codable, Hashable {
     
     static let defaultParticipants: [Participant] = [
         Participant(id: "paul", name: "Paul", nickname: "The Billable Hour",
-                    roundsPaid: 0, roundsAttended: 0, lastPaidDate: nil,
+                    roundsPaid: 0, roundsAttended: 0, firedOrPIPsLastWeek: 0, lastPaidDate: nil,
                     avatarEmoji: "⚖️", isCurrentUser: false, rosterPosition: 0),
         Participant(id: "justin", name: "Justin", nickname: "The Cardio King",
-                    roundsPaid: 0, roundsAttended: 0, lastPaidDate: nil,
+                    roundsPaid: 0, roundsAttended: 0, firedOrPIPsLastWeek: 0, lastPaidDate: nil,
                     avatarEmoji: "🏃", isCurrentUser: false, rosterPosition: 1),
         Participant(id: "johnny", name: "Johnny", nickname: "The Waitress Whisperer",
-                    roundsPaid: 0, roundsAttended: 0, lastPaidDate: nil,
+                    roundsPaid: 0, roundsAttended: 0, firedOrPIPsLastWeek: 0, lastPaidDate: nil,
                     avatarEmoji: "🎭", isCurrentUser: false, rosterPosition: 2),
         Participant(id: "jonny", name: "Jonny", nickname: "Diamond Ring Maybe",
-                    roundsPaid: 0, roundsAttended: 0, lastPaidDate: nil,
+                    roundsPaid: 0, roundsAttended: 0, firedOrPIPsLastWeek: 0, lastPaidDate: nil,
                     avatarEmoji: "⚾️", isCurrentUser: false, rosterPosition: 3),
         Participant(id: "cliff", name: "Cliff", nickname: "Cardiac Cliff",
-                    roundsPaid: 0, roundsAttended: 0, lastPaidDate: nil,
+                    roundsPaid: 0, roundsAttended: 0, firedOrPIPsLastWeek: 0, lastPaidDate: nil,
                     avatarEmoji: "❤️‍🩹", isCurrentUser: false, rosterPosition: 4),
         Participant(id: "barry", name: "Barry", nickname: "The Silverback",
-                    roundsPaid: 0, roundsAttended: 0, lastPaidDate: nil,
+                    roundsPaid: 0, roundsAttended: 0, firedOrPIPsLastWeek: 0, lastPaidDate: nil,
                     avatarEmoji: "🦁", isCurrentUser: false, rosterPosition: 5),
         Participant(id: "tim", name: "Tim", nickname: "The Mystery Man",
-                    roundsPaid: 0, roundsAttended: 0, lastPaidDate: nil,
+                    roundsPaid: 0, roundsAttended: 0, firedOrPIPsLastWeek: 0, lastPaidDate: nil,
                     avatarEmoji: "🎯", isCurrentUser: false, rosterPosition: 6)
     ]
     
@@ -64,6 +65,7 @@ struct Participant: Identifiable, Codable, Hashable {
         record["nickname"] = nickname
         record["roundsPaid"] = roundsPaid
         record["roundsAttended"] = roundsAttended
+        record["firedOrPIPsLastWeek"] = firedOrPIPsLastWeek
         record["lastPaidDate"] = lastPaidDate
         record["avatarEmoji"] = avatarEmoji
         record["rosterPosition"] = rosterPosition
@@ -85,18 +87,20 @@ struct Participant: Identifiable, Codable, Hashable {
         self.nickname = nickname
         self.roundsPaid = roundsPaid
         self.roundsAttended = roundsAttended
+        self.firedOrPIPsLastWeek = record["firedOrPIPsLastWeek"] as? Int ?? 0
         self.lastPaidDate = record["lastPaidDate"] as? Date
         self.avatarEmoji = avatarEmoji
         self.isCurrentUser = false
         self.rosterPosition = rosterPosition
     }
     
-    init(id: String, name: String, nickname: String, roundsPaid: Int, roundsAttended: Int, lastPaidDate: Date?, avatarEmoji: String, isCurrentUser: Bool, rosterPosition: Int) {
+    init(id: String, name: String, nickname: String, roundsPaid: Int, roundsAttended: Int, firedOrPIPsLastWeek: Int, lastPaidDate: Date?, avatarEmoji: String, isCurrentUser: Bool, rosterPosition: Int) {
         self.id = id
         self.name = name
         self.nickname = nickname
         self.roundsPaid = roundsPaid
         self.roundsAttended = roundsAttended
+        self.firedOrPIPsLastWeek = firedOrPIPsLastWeek
         self.lastPaidDate = lastPaidDate
         self.avatarEmoji = avatarEmoji
         self.isCurrentUser = isCurrentUser

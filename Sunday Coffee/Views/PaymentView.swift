@@ -3,6 +3,7 @@ import SwiftUI
 struct PaymentView: View {
     @EnvironmentObject var store: CoffeeStore
     @State private var attendees: Set<String> = []
+    @State private var hasRevealedPayer = false
     @State private var showConfirmation = false
     @State private var confirmedPayer: Participant?
     
@@ -27,6 +28,9 @@ struct PaymentView: View {
                         // Attendance checkboxes
                         attendanceSection
                         
+                        // Reveal payer once check-in is final
+                        revealPayerButton
+                        
                         // Confirm button
                         confirmButton
                     }
@@ -35,9 +39,6 @@ struct PaymentView: View {
             }
             .navigationTitle("Sunday Coffee")
             .navigationBarTitleDisplayMode(.large)
-            .onAppear {
-                attendees = Set(store.participants.map { $0.id })
-            }
             .alert("Payment Recorded! ☕️", isPresented: $showConfirmation) {
                 Button("OK", role: .cancel) { }
             } message: {
@@ -51,7 +52,7 @@ struct PaymentView: View {
     // MARK: - Payer Card
     private var payerCard: some View {
         VStack(spacing: 0) {
-            if let payer = todaysPayer {
+            if hasRevealedPayer, let payer = todaysPayer {
                 VStack(spacing: 8) {
                     Text(payer.avatarEmoji)
                         .font(.system(size: 70))
@@ -80,14 +81,32 @@ struct PaymentView: View {
                                 .stroke(Color(hex: "8B4513"), lineWidth: 2)
                         )
                 )
-            } else {
-                // No one selected yet
+            } else if attendeeList.isEmpty {
                 VStack(spacing: 8) {
                     Text("☕️")
                         .font(.system(size: 70))
                     
                     Text("Select who's here")
                         .font(.system(size: 20, weight: .medium))
+                        .foregroundColor(Color(hex: "8B7355"))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(Color.white)
+                )
+            } else {
+                VStack(spacing: 8) {
+                    Text("📝")
+                        .font(.system(size: 66))
+                    
+                    Text("Check in attendees first")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundColor(Color(hex: "4A2C2A"))
+                    
+                    Text("Payer reveals after check-in")
+                        .font(.system(size: 16))
                         .foregroundColor(Color(hex: "8B7355"))
                 }
                 .frame(maxWidth: .infinity)
@@ -117,6 +136,7 @@ struct PaymentView: View {
                     } else {
                         attendees = Set(store.participants.map { $0.id })
                     }
+                    hasRevealedPayer = false
                 }
                 .font(.system(size: 16, weight: .medium))
                 .foregroundColor(Color(hex: "8B4513"))
@@ -130,6 +150,7 @@ struct PaymentView: View {
                         } else {
                             attendees.insert(p.id)
                         }
+                        hasRevealedPayer = false
                     } label: {
                         HStack(spacing: 12) {
                             Text(p.avatarEmoji)
@@ -154,6 +175,26 @@ struct PaymentView: View {
         }
     }
     
+    // MARK: - Reveal Payer
+    private var revealPayerButton: some View {
+        Button {
+            hasRevealedPayer = true
+        } label: {
+            HStack {
+                Image(systemName: "eye.fill")
+                    .font(.system(size: 20))
+                Text(hasRevealedPayer ? "Payer Revealed" : "Reveal Who Pays")
+            }
+            .font(.system(size: 18, weight: .semibold))
+            .foregroundColor(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(attendeeList.count >= 2 ? Color(hex: "4A2C2A") : Color.gray)
+            .cornerRadius(12)
+        }
+        .disabled(attendeeList.count < 2)
+    }
+    
     // MARK: - Confirm Button
     private var confirmButton: some View {
         Button {
@@ -168,10 +209,10 @@ struct PaymentView: View {
             .foregroundColor(.white)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 18)
-            .background(attendeeList.count >= 2 ? Color(hex: "8B4513") : Color.gray)
+            .background(attendeeList.count >= 2 && hasRevealedPayer ? Color(hex: "8B4513") : Color.gray)
             .cornerRadius(14)
         }
-        .disabled(attendeeList.count < 2)
+        .disabled(attendeeList.count < 2 || !hasRevealedPayer)
     }
     
     // MARK: - Actions
@@ -186,8 +227,9 @@ struct PaymentView: View {
         confirmedPayer = payer
         showConfirmation = true
         
-        // Reset to everyone here for next time
-        attendees = Set(store.participants.map { $0.id })
+        // Reset for next round
+        attendees.removeAll()
+        hasRevealedPayer = false
     }
 }
 
