@@ -17,6 +17,7 @@ class CoffeeStore: ObservableObject {
     
     private var container: CKContainer?
     private var database: CKDatabase?
+    private let cloudKitContainerIdentifier = "iCloud.com.sundaycoffee.app"
     
     // Record types
     private let participantRecordType = "Participant"
@@ -29,10 +30,12 @@ class CoffeeStore: ObservableObject {
     }
     
     private func checkCloudKitAvailability() {
-        CKContainer.default().accountStatus { [weak self] status, error in
+        let cloudContainer = CKContainer(identifier: cloudKitContainerIdentifier)
+        
+        cloudContainer.accountStatus { [weak self] status, error in
             Task { @MainActor in
                 if status == .available {
-                    self?.container = CKContainer.default()
+                    self?.container = cloudContainer
                     self?.database = self?.container?.publicCloudDatabase
                     self?.cloudKitAvailable = true
                     await self?.fetchFromCloud()
