@@ -17,16 +17,115 @@ class CoffeeStore: ObservableObject {
     
     private var container: CKContainer?
     private var database: CKDatabase?
+    private var pendingRefreshTask: Task<Void, Never>?
     private let cloudKitContainerIdentifier = "iCloud.com.sundaycoffee.app"
     
     // Record types
     private let participantRecordType = "Participant"
     private let roundRecordType = "CoffeeRound"
     private let rosterRecordType = "RosterState"
+    private let roundIndexRecordType = "RoundIndex"
+    private let roundIndexRecordName = "coffee-round-index"
     
     init() {
         loadLocalData()
         checkCloudKitAvailability()
+    }
+    
+    private func isMissingRecordTypeError(_ error: Error) -> Bool {
+        error.localizedDescription.contains("Did not find record type")
+    }
+    
+    private func isNotQueryableFieldError(_ error: Error) -> Bool {
+        error.localizedDescription.contains("not marked queryable")
+    }
+    
+    private func isUnknownItemError(_ error: Error) -> Bool {
+        guard let ckError = error as? CKError else { return false }
+        if ckError.code == .unknownItem {
+            return true
+        }
+        if ckError.code == .partialFailure,
+           let partial = ckError.userInfo[CKPartialErrorsByItemIDKey] as? [AnyHashable: Error] {
+            return partial.values.allSatisfy { ($0 as? CKError)?.code == .unknownItem }
+        }
+        return false
+    }
+    
+    private func fetchParticipantFromCloud(id: String) async throws -> Participant? {
+        guard let database else { return nil }
+        let recordID = CKRecord.ID(recordName: id)
+        do {
+            let record = try await database.record(for: recordID)
+            return Participant(from: record)
+        } catch {
+            if isUnknownItemError(error) {
+                return nil
+            }
+            throw error
+        }
+    }
+    
+    private func fetchRosterStateFromCloud() async throws -> RosterState? {
+        guard let database else { return nil }
+        let recordID = CKRecord.ID(recordName: "roster-state")
+        do {
+            let record = try await database.record(for: recordID)
+            return RosterState(from: record)
+        } catch {
+            if isUnknownItemError(error) {
+                return nil
+            }
+            throw error
+        }
+    }
+    
+    private func fetchCoffeeRoundFromCloud(id: String) async throws -> CoffeeRound? {
+        guard let database else { return nil }
+        let recordID = CKRecord.ID(recordName: id)
+        do {
+            let record = try await database.record(for: recordID)
+            return CoffeeRound(from: record)
+        } catch {
+            if isUnknownItemError(error) {
+                return nil
+            }
+            throw error
+        }
+    }
+    
+    private func fetchRoundIndexFromCloud() async throws -> [String]? {
+        guard let database else { return nil }
+        let recordID = CKRecord.ID(recordName: roundIndexRecordName)
+        do {
+            let record = try await database.record(for: recordID)
+            return record["roundIDs"] as? [String] ?? []
+        } catch {
+            if isUnknownItemError(error) {
+                return nil
+            }
+            throw error
+        }
+    }
+    
+    private func saveRoundIndexToCloud(_ roundIDs: [String]) async {
+        guard let database else { return }
+        let recordID = CKRecord.ID(recordName: roundIndexRecordName)
+        let record = CKRecord(recordType: roundIndexRecordType, recordID: recordID)
+        record["roundIDs"] = roundIDs
+        record["lastUpdated"] = Date()
+        
+        do {
+            _ = try await database.save(record)
+        } catch {
+            print("Error saving round index: \(error)")
+        }
+    }
+    
+    private func appendRoundIDToCloudIndex(_ roundID: String) async {
+        let existing = (try? await fetchRoundIndexFromCloud()) ?? []
+        if existing.contains(roundID) { return }
+        await saveRoundIndexToCloud(existing + [roundID])
     }
     
     private func checkCloudKitAvailability() {
@@ -93,61 +192,87 @@ class CoffeeStore: ObservableObject {
     
     // MARK: - CloudKit Fetch
     func fetchFromCloud() async {
-        guard let database = database else {
+        guard database != nil else {
             syncError = "CloudKit not configured"
             return
         }
+        guard !isSyncing else { return }
         
         isSyncing = true
         syncError = nil
         
         do {
-            // Fetch participants
-            let participantQuery = CKQuery(recordType: participantRecordType, predicate: NSPredicate(value: true))
-            let participantResults = try await database.records(matching: participantQuery)
-            
+            // Fetch participants by known IDs (avoids CloudKit query/index requirements on recordName).
             var fetchedParticipants: [Participant] = []
-            for (_, result) in participantResults.matchResults {
-                if let record = try? result.get() {
-                    if let participant = Participant(from: record) {
-                        fetchedParticipants.append(participant)
+            for participantID in Participant.rosterOrder {
+                if let participant = try await fetchParticipantFromCloud(id: participantID) {
+                    fetchedParticipants.append(participant)
+                }
+            }
+            
+            if fetchedParticipants.count == Participant.defaultParticipants.count {
+                participants = fetchedParticipants.sorted { $0.rosterPosition < $1.rosterPosition }
+            } else {
+                let fetchedByID = Dictionary(uniqueKeysWithValues: fetchedParticipants.map { ($0.id, $0) })
+                let mergedParticipants = Participant.defaultParticipants.map { fetchedByID[$0.id] ?? $0 }
+                
+                participants = mergedParticipants.sorted { $0.rosterPosition < $1.rosterPosition }
+                
+                // If CloudKit is fresh or partially seeded, push the full roster to bootstrap/repair it.
+                if fetchedParticipants.count < Participant.defaultParticipants.count {
+                    await uploadParticipants()
+                }
+            }
+            
+            // Fetch roster state by fixed ID (avoids query/index requirements).
+            do {
+                if let state = try await fetchRosterStateFromCloud() {
+                    rosterState = state
+                } else {
+                    rosterState = .initial
+                    await saveRosterToCloud()
+                }
+            }
+            
+            // Fetch coffee rounds via index record (avoids CloudKit query-index requirements).
+            do {
+                let roundIDsFromIndex = try await fetchRoundIndexFromCloud()
+                let roundIDs: [String]
+                
+                if let indexedIDs = roundIDsFromIndex {
+                    roundIDs = indexedIDs
+                } else {
+                    // Migrate to index-based syncing using local history if available.
+                    let localRoundIDs = coffeeRounds.map(\.id)
+                    roundIDs = localRoundIDs
+                    if !localRoundIDs.isEmpty {
+                        await saveRoundIndexToCloud(localRoundIDs)
                     }
                 }
-            }
-            
-            if !fetchedParticipants.isEmpty {
-                participants = fetchedParticipants.sorted { $0.rosterPosition < $1.rosterPosition }
-            } else if participants.isEmpty {
-                // First time - seed defaults and upload
-                participants = Participant.defaultParticipants
-                await uploadParticipants()
-            }
-            
-            // Fetch roster state
-            let rosterQuery = CKQuery(recordType: rosterRecordType, predicate: NSPredicate(value: true))
-            let rosterResults = try await database.records(matching: rosterQuery)
-            
-            for (_, result) in rosterResults.matchResults {
-                if let record = try? result.get(),
-                   let state = RosterState(from: record) {
-                    rosterState = state
-                    break
+                
+                var fetchedRounds: [CoffeeRound] = []
+                var validRoundIDs: [String] = []
+                for roundID in roundIDs {
+                    if let round = try await fetchCoffeeRoundFromCloud(id: roundID) {
+                        fetchedRounds.append(round)
+                        validRoundIDs.append(roundID)
+                    }
+                }
+                
+                if validRoundIDs.count != roundIDs.count {
+                    // Prune stale IDs if records were removed or failed to save previously.
+                    await saveRoundIndexToCloud(validRoundIDs)
+                }
+                
+                coffeeRounds = fetchedRounds.sorted { $0.date > $1.date }
+            } catch {
+                if isMissingRecordTypeError(error) {
+                    coffeeRounds = []
+                } else {
+                    throw error
                 }
             }
             
-            // Fetch coffee rounds
-            let roundQuery = CKQuery(recordType: roundRecordType, predicate: NSPredicate(value: true))
-            roundQuery.sortDescriptors = [NSSortDescriptor(key: "date", ascending: false)]
-            let roundResults = try await database.records(matching: roundQuery)
-            
-            var fetchedRounds: [CoffeeRound] = []
-            for (_, result) in roundResults.matchResults {
-                if let record = try? result.get(),
-                   let round = CoffeeRound(from: record) {
-                    fetchedRounds.append(round)
-                }
-            }
-            coffeeRounds = fetchedRounds.sorted { $0.date > $1.date }
             lastSyncDate = Date()
             
             saveLocal()
@@ -157,6 +282,26 @@ class CoffeeStore: ObservableObject {
             print("CloudKit fetch error: \(error)")
             syncError = error.localizedDescription
             isSyncing = false
+        }
+    }
+    
+    func scheduleCloudRefresh(after delaySeconds: Double = 1.5) {
+        guard cloudKitAvailable else { return }
+        
+        pendingRefreshTask?.cancel()
+        pendingRefreshTask = Task { @MainActor in
+            let nanos = UInt64(max(0, delaySeconds) * 1_000_000_000)
+            if nanos > 0 {
+                try? await Task.sleep(nanoseconds: nanos)
+            }
+            guard !Task.isCancelled else { return }
+            
+            // If a sync is already running, wait briefly and try once more.
+            if isSyncing {
+                try? await Task.sleep(nanoseconds: 750_000_000)
+                guard !Task.isCancelled else { return }
+            }
+            await fetchFromCloud()
         }
     }
     
@@ -193,13 +338,15 @@ class CoffeeStore: ObservableObject {
         }
     }
     
-    private func saveRoundToCloud(_ round: CoffeeRound) async {
-        guard let database = database else { return }
+    private func saveRoundToCloud(_ round: CoffeeRound) async -> Bool {
+        guard let database = database else { return false }
         let record = round.toRecord()
         do {
             _ = try await database.save(record)
+            return true
         } catch {
             print("Error saving round: \(error)")
+            return false
         }
     }
     
@@ -214,37 +361,22 @@ class CoffeeStore: ObservableObject {
         guard !attendees.isEmpty else { return nil }
         
         let order = Participant.rosterOrder
-        let cursor = rosterState.cursor
         let n = order.count
+        let cursor = ((rosterState.cursor % max(n, 1)) + max(n, 1)) % max(n, 1)
+        let attendeeIDs = Set(attendees.map(\.id))
+        let attendeesByID = Dictionary(uniqueKeysWithValues: attendees.map { ($0.id, $0) })
         
-        // Calculate cursor distance for tie-breaking
-        func cursorDistance(for participant: Participant) -> Int {
-            guard let idx = order.firstIndex(of: participant.id) else { return n }
-            return (idx - cursor + n) % n
+        // Pure round-robin: choose the first attendee encountered when scanning
+        // forward through roster order from the current cursor.
+        for offset in 0..<n {
+            let candidateID = order[(cursor + offset) % n]
+            if attendeeIDs.contains(candidateID), let participant = attendeesByID[candidateID] {
+                return participant
+            }
         }
         
-        // Sort attendees by:
-        // 1. Oldest lastPaidDate (nil = oldest, so comes first)
-        // 2. Lowest roundsPaid (least frequent payer)
-        // 3. Closest to cursor in cyclic order (rotating tie-break)
-        let sorted = attendees.sorted { a, b in
-            // Primary: oldest last_paid (nil counts as oldest)
-            let aDate = a.lastPaidDate ?? Date.distantPast
-            let bDate = b.lastPaidDate ?? Date.distantPast
-            if aDate != bDate {
-                return aDate < bDate
-            }
-            
-            // Secondary: lowest pay_count
-            if a.roundsPaid != b.roundsPaid {
-                return a.roundsPaid < b.roundsPaid
-            }
-            
-            // Tertiary: rotating cursor tie-break
-            return cursorDistance(for: a) < cursorDistance(for: b)
-        }
-        
-        return sorted.first
+        // Fallback for any unexpected ID mismatch.
+        return attendees.sorted { $0.rosterPosition < $1.rosterPosition }.first
     }
     
     // MARK: - Record Payment
@@ -275,7 +407,7 @@ class CoffeeStore: ObservableObject {
             }
         }
         
-        // Advance cursor to the person after the payer (for tie-breaking)
+        // Advance cursor to the person after the payer for the next round-robin choice.
         let order = Participant.rosterOrder
         if let payerIndex = order.firstIndex(of: payerID) {
             rosterState.cursor = (payerIndex + 1) % order.count
@@ -284,7 +416,12 @@ class CoffeeStore: ObservableObject {
         }
         
         saveLocal()
-        Task { await saveRoundToCloud(round) }
+        Task {
+            if await saveRoundToCloud(round) {
+                await appendRoundIDToCloudIndex(round.id)
+            }
+        }
+        scheduleCloudRefresh()
     }
     
     // MARK: - Performance Tracking
